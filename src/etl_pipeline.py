@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import csv  # noqa: F401
 import os  # noqa: F401
+import re  # noqa: F401
 from pathlib import Path
 
 from dotenv import load_dotenv  # noqa: F401
@@ -43,17 +44,33 @@ PG_COLUMN_SCHEMA = (
 
 def extract(spark: SparkSession, csv_path: str) -> DataFrame:
     """Load the CSV dataset into a PySpark DataFrame with correct data types."""
-    raise NotImplementedError
+    df = spark.read.csv(csv_path, header=True, inferSchema=True)
+    df = df.withColumn("sale_date", F.to_date(F.col("sale_date"), "M/d/yy"))
+    return df
 
 
 def transform(df: DataFrame) -> dict[str, DataFrame]:
     """Split the data by neighborhood and save each as a separate CSV file."""
-    raise NotImplementedError
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    partitions: dict[str, DataFrame] = {}
+    for hood in NEIGHBORHOODS:
+        hood_df = df.filter(F.col("neighborhood") == hood).orderBy("house_id")
+        partitions[hood] = hood_df
+        pdf = hood_df.toPandas()
+        pdf.to_csv(str(OUTPUT_FILES[hood]), index=False, date_format="%Y-%m-%d")
+    return partitions
 
 
 def load(partitions: dict[str, DataFrame], jdbc_url: str, pg_props: dict) -> None:
     """Insert each neighborhood dataset into its own PostgreSQL table."""
-    raise NotImplementedError
+    clean = re.sub(r"\([^)]+\)", "", PG_COLUMN_SCHEMA)
+    pg_cols = [c.strip().split()[0] for c in clean.split(",")]
+    for hood, sdf in partitions.items():
+        table_name = PG_TABLES[hood]
+        pg_df = sdf.select(*pg_cols)
+        pg_df.write.jdbc(
+            url=jdbc_url, table=table_name, mode="overwrite", properties=pg_props
+        )
 
 
 # ── Main (do not modify) ───────────────────────────────────────────────────────
